@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ne">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image to Video (20 sec)</title>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:720px;margin:24px auto;padding:0 16px;background:#111;color:#eee}
+  h1{font-size:1.4rem}
+  .box{background:#1c1c1c;border-radius:12px;padding:16px;margin-bottom:16px}
+  button{background:#4f46e5;color:#fff;border:0;border-radius:8px;padding:12px 18px;font-size:1rem;cursor:pointer}
+  button:disabled{background:#555;cursor:not-allowed}
+  select{padding:8px;border-radius:6px;border:1px solid #444;background:#222;color:#eee}
+  canvas{width:100%;background:#000;border-radius:10px}
+  #thumbs img{width:70px;height:70px;object-fit:cover;border-radius:8px;margin:4px}
+  #status{margin:10px 0;color:#aaa}
+  #download{display:none;color:#8ab4ff;font-weight:bold}
+</style>
+</head>
+<body>
+<h1>🖼️ ➜ 🎬 Image to Video (20 second)</h1>
+
+<div class="box">
+  <label>Image select garnuhos (1 ya dherai):</label><br>
+  <input type="file" id="files" accept="image/*" multiple>
+  <div id="thumbs"></div>
+</div>
+
+<div class="box">
+  <label>Animation:
+    <select id="effect">
+      <option value="zoom">Zoom in</option>
+      <option value="zoomout">Zoom out</option>
+      <option value="pan">Pan (left ↔ right)</option>
+    </select>
+  </label>
+  <label style="margin-left:12px">Size:
+    <select id="size">
+      <option value="1280x720">16:9 (1280x720)</option>
+      <option value="720x1280">9:16 Reels (720x1280)</option>
+      <option value="1080x1080">1:1 (1080x1080)</option>
+    </select>
+  </label>
+</div>
+
+<div class="box">
+  <canvas id="canvas" width="1280" height="720"></canvas>
+  <p><button id="generate" disabled>🎬 20 sec video banau</button></p>
+  <div id="status">Pahila image select garnuhos.</div>
+  <a id="download" download="video.webm">⬇ Video download garnuhos (.webm)</a>
+</div>
+
+<script>
+const DURATION = 20;   // seconds
+const FPS = 30;
+const FADE = 1.0;      // crossfade seconds between images
+
+const $ = id => document.getElementById(id);
+const canvas = $('canvas'), ctx = canvas.getContext('2d');
+const fileInput = $('files'), btn = $('generate'), statusEl = $('status');
+const dl = $('download'), thumbs = $('thumbs');
+const sizeSel = $('size'), effectSel = $('effect');
+let images = [];
+
+function loadImg(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+fileInput.onchange = async () => {
+  statusEl.textContent = 'Loading...';
+  try {
+    images = await Promise.all([...fileInput.files].map(loadImg));
+  } catch {
+    statusEl.textContent = 'Image load garna mildaina ❌';
+    return;
+  }
+  thumbs.innerHTML = '';
+  images.forEach(img => {
+    const c = img.cloneNode();
+    c.width = 70; c.height = 70;
+    thumbs.appendChild(c);
+  });
+  btn.disabled = images.length === 0;
+  statusEl.textContent = `${images.length} image ready ✅`;
+  drawFrame(0);
+};
+
+sizeSel.onchange = () => {
+  const [w, h] = sizeSel.value.split('x').map(Number);
+  canvas.width = w;
+  canvas.height = h;
+  drawFrame(0);
+};
+
+effectSel.onchange = () => drawFrame(0);
+
+// Draw one image so it covers the canvas, with zoom or pan based on p (0..1)
+function drawKen(img, p) {
+  const cw = canvas.width, ch = canvas.height;
+  const cover = Math.max(cw / img.width, ch / img.height);
+  const effect = effectSel.value;
+  let zoom = 1.2;
+  if (effect === 'zoom') zoom = 1 + 0.2 * p;
+  else if (effect === 'zoomout') zoom = 1.2 - 0.2 * p;
+
+  const dw = img.width * cover * zoom;
+  const dh = img.height * cover * zoom;
+  let dx = (cw - dw) / 2;
+  const dy = (ch - dh) / 2;
+  if (effect === 'pan') dx += (p - 0.5) * (dw - cw);
+  ctx.drawImage(img, dx, dy, dw, dh);
+}
+
+// Draw the frame at time t (seconds) of the 20 sec video
+function drawFrame(t) {
+  const cw = canvas.width, ch = canvas.height;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, cw, ch);
+  const n = images.length;
+  if (!n) return;
+
+  const seg = DURATION / n;                       // time per image
+  const i = Math.min(Math.floor(t / seg), n - 1);
+  const local = t - i * seg;
+  drawKen(images[i], local / seg);
+
+  // Crossfade into the next image near the end of this segment
+  const fade = Math.min(FADE, seg * 0.3);
+  if (i + 1 < n && local > seg - fade) {
+    ctx.globalAlpha = (local - (seg - fade)) / fade;
+    drawKen(images[i + 1], 0);
+    ctx.globalAlpha = 1;
+  }
+}
+
+async function generate() {
+  if (!images.length) return;
+  btn.disabled = true;
+  dl.style.display = 'none';
+
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
+    .find(m => MediaRecorder.isTypeSupported(m));
+  const rec = new MediaRecorder(canvas.captureStream(FPS), {
+    mimeType: mime,
+    videoBitsPerSecond: 6000000
+  });
+  const chunks = [];
+  rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(r => rec.onstop = r);
+
+  rec.start(250);
+  const start = performance.now();
+  await new Promise(resolve => {
+    const tick = () => {
+      const t = (performance.now() - start) / 1000;
+      if (t >= DURATION) { drawFrame(DURATION); return resolve(); }
+      drawFrame(t);
+      statusEl.textContent = `Recording... ${t.toFixed(1)} / ${DURATION}s`;
+      setTimeout(tick, 1000 / FPS);
+    };
+    tick();
+  });
+
+  await new Promise(r => setTimeout(r, 200)); // last frame ko lagi
+  rec.stop();
+  await stopped;
+
+  dl.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+  dl.style.display = 'inline-block';
+  statusEl.textContent = 'Done! 20 sec video ready ✅';
+  btn.disabled = false;
+}
+
+btn.onclick = generate;
+</script>
+</body>
+</html>
